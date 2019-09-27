@@ -13,9 +13,7 @@ import sys
 import textwrap
 import yaml
 from urllib.parse import urljoin
-import logging
 
-logging.basicConfig(level=logging.DEBUG)
 
 dotfile = ".discli"
 
