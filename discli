@@ -1,6 +1,7 @@
 #! /usr/bin/env python3
 
 import argparse
+import datetime
 import json
 import os
 import re
@@ -12,24 +13,39 @@ import sys
 import textwrap
 import yaml
 from urllib.parse import urljoin
+import logging
 
+logging.basicConfig(level=logging.DEBUG)
 
 dotfile = ".discli"
 
+def counter(start=0):
+    i = start
+    while True:
+        yield i
+        i = i + 1
+
+def now():
+    return datetime.datetime.utcnow().isoformat(sep='T', timespec='minutes') + '+00:00'
 
 class DiscourseHelper:
 
     def __init__(self):
+        self.http = requests.Session()
         parser = argparse.ArgumentParser(
             description='Helper to work with discourse files locally',
-            usage=textwrap.dedent('''
-                discli <command> [<args>]
+            usage=textwrap.dedent('''\
+                discli <command> [<arg> ...]
 
-                The commands are:
-                   init      Record your api key and target discourse
-                   get       Get the file
-                   put       Put a file back
-                   get_posts_in_category  Get all the posts in the given category name
+                Commands:
+                   init <url> <username> <api_key>   Record your API key and target Discourse
+                   forget                            Deletes your credentials
+                
+                Commands that interact with Discourse directly:
+                   get <topic-id>                    Download a Discourse topic 
+                   copy <topic-id>                   Update a topic with the local file's contents
+                   send <topic-id>                   Issue copy, then remove the local file
+                   gulp <category>                   Get all the posts for category
                 '''))
         parser.add_argument('command', help='Subcommand to run')
         # parse_args defaults to [1:] for args, but you need to
@@ -82,6 +98,9 @@ class DiscourseHelper:
             }, f, default_flow_style=False)
         print("Values set: {}".format(self.identity))
 
+    def forget(self):
+        os.unlink(self._identity_file)
+
     def get(self):
         parser = argparse.ArgumentParser(
             description='get a single post')
@@ -92,6 +111,7 @@ class DiscourseHelper:
     def save_topic_as_file(self, topic_id):
         post_id = self.get_topic_first_post(topic_id)
         data = self.get_post(post_id)
+        print(data)
         slug = data['topic_slug']
         id = data['id']
         filename = f"{topic_id}-{slug}.md"
@@ -110,9 +130,9 @@ class DiscourseHelper:
                 content += '\n'
             f.write(content)
 
-    def put(self):
+    def _update_topic(self, remove_local=True):
         parser = argparse.ArgumentParser(
-            description='get a single post')
+            description='update a topic')
         parser.add_argument("topic", help="topic id or filename of the discourse post")
         args = parser.parse_args(sys.argv[2:])
 
@@ -126,7 +146,14 @@ class DiscourseHelper:
             content = f.read()
             self.put_post(local['id'], content)
         self.update_metadata(topic_id, None)
-        os.remove(filename)
+        if remove_local:
+            os.remove(filename)
+
+    def copy(self):
+        self._update_topic(remove_local=False)
+
+    def send(self):
+        self._update_topic(remove_local=True)
 
     def get_post(self, id):
         response = self.request(f"posts/{id}.json")
@@ -134,7 +161,7 @@ class DiscourseHelper:
             return json.loads(response.text)
         raise RuntimeError("couldn't get post {}: status code {}", id, response.status_code)
 
-    def get_posts_in_category(self):
+    def gulp(self):
         """
         Get all the posts in a category
         """
@@ -143,9 +170,20 @@ class DiscourseHelper:
         parser.add_argument("category", help="name of the category to get posts from", type=str)
         args = parser.parse_args(sys.argv[2:])
 
-        for page in range(1, 20):
+        query_parts = [f"category:{args.category}"]
+        last_time = self.last_gulp()
+        if last_time:
+            query_parts.append(f"updated-after:{last_time}")
+
+        params = {
+            'q': '%20'.join(query_parts)
+        }
+
+        for page in counter(start=1):
             print(f"Getting page {page} of results...")
-            response = self.request(f"/search.json?q=category%3A{args.category}&page={page}")
+            params['page'] = f"{page}"
+
+            response = self.request("/search.json", params=params)
 
             if response.status_code != 200:
                 raise RuntimeError("couldn't get category posts {}: status code {}", id, response.status_code)
@@ -163,41 +201,47 @@ class DiscourseHelper:
                     continue
 
                 self.save_topic_as_file(topic["id"])
+        self.update_metadata('_meta', {'updated_at': now()})
 
-    def request(self, path):
+
+    def request(self, path, data=None, params=None, method='GET'):
         """
         Use requests to fetch an API URL,
         padding in the auth token,
         and retrying if we get a 429 response
         """
+        assert method in {"GET", "PUT", "POST"}
 
-        response = None
+        if params is None:
+            params = {}
 
-        while response is None or response.status_code == 429:
-            if response is not None and response.status_code == 429:
-                seconds = 5
-                error_message = response.json()["errors"][0]
-                seconds_match = re.search("wait (\d+) seconds", error_message)
+        for k,v in self.api_auth.items():
+            params[k] = v
 
-                if seconds_match:
-                    seconds = int(seconds_match.groups()[0]) + 1
+        response = self.http.request(method, urljoin(self.identity["url"], path), params=params, data=data)
+        if response.status_code != 429:
+            return response
 
-                print(
-                    f"  > 429 from API, waiting {seconds} seconds ... "
-                    f"('{response.json()['errors']}')"
-                )
-                time.sleep(seconds)
+        error_message = response.json()["errors"][0]
+        seconds_match = re.search("wait (\d+) seconds", error_message)
+        if seconds_match:
+            seconds = int(seconds_match.group(1)) + 1
+        else:
+            seconds = 5
 
-            response = requests.get(urljoin(self.identity["url"], path), params=self.api_auth)
-
-        return response
+        print(
+            f"  > 429 from API, waiting {seconds} seconds ... "
+            f"('{response.json()['errors']}')"
+        )
+        time.sleep(seconds)
+        return self.request(path)
 
     def put_post(self, id, content):
         post_path = urljoin(self.identity["url"], f"posts/{id}.json")
 
         data = self.api_auth
         data["post[raw]"] = content
-        resp = requests.put(post_path, data=data)
+        resp = self.request(post_path, method="PUT", data=data)
         if resp.status_code != 200:
             raise RuntimeError("couldn't update post {}: status code {}", id, r.status_code)
 
@@ -242,6 +286,10 @@ class DiscourseHelper:
                     return id, meta
 
         raise RuntimeError(f"{topic} is neither a topic id nor a known filename")
+
+    def last_gulp(self):
+        info = self.dotfile_contents()
+        return info.get('_meta', {}).get("updated_at")
 
 
 if __name__ == '__main__':
