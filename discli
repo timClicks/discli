@@ -177,6 +177,8 @@ class DiscourseHelper:
             'q': '%20'.join(query_parts)
         }
 
+        last_topics = set()
+
         for page in counter(start=1):
             print(f"Getting page {page} of results...")
             params['page'] = f"{page}"
@@ -192,13 +194,13 @@ class DiscourseHelper:
                 break
 
             topics = results['topics']
+            topic_ids = set(topic['id'] for topic in topics) # the discourse API seems to provide an infinite number of pages
+            if topic_ids == last_topics:
+                break
 
             for topic in topics:
-                if glob.glob(f"{topic['id']}-*.md"):
-                    print(f"File for topic {topic['id']} already exists. Skipping.")
-                    continue
-
                 self.save_topic_as_file(topic["id"])
+            last_topics = topic_ids
         self.update_metadata('_meta', {'updated_at': now()})
 
 
@@ -268,9 +270,7 @@ class DiscourseHelper:
 
     def read_metadata(self, post):
         info = self.dotfile_contents()
-        if post in info:
-            return info[post]
-        return {}
+        return info.get(post)
 
     def get_topic_metadata(self, topic):
         # topic is either the topic number or the name of the file.
