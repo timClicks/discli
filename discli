@@ -43,7 +43,7 @@ class DiscourseHelper:
                    get <topic-id>                    Download a Discourse topic 
                    copy <topic-id>                   Update a topic with the local file's contents
                    send <topic-id>                   Issue copy, then remove the local file
-                   gulp <category>                   Get all the posts for category
+                   sync <category>                   Get all the posts for category
                 '''))
         parser.add_argument('command', help='Subcommand to run')
         # parse_args defaults to [1:] for args, but you need to
@@ -159,7 +159,7 @@ class DiscourseHelper:
             return json.loads(response.text)
         raise RuntimeError("couldn't get post {}: status code {}", id, response.status_code)
 
-    def gulp(self):
+    def sync(self):
         """
         Get all the posts in a category
         """
