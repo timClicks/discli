@@ -30,6 +30,8 @@ class DiscourseHelper:
 
     def __init__(self):
         self.http = requests.Session()
+        self.delay = 0.1
+
         parser = argparse.ArgumentParser(
             description='Helper to work with discourse files locally',
             usage=textwrap.dedent('''\
@@ -183,7 +185,14 @@ class DiscourseHelper:
             print(f"Getting page {page} of results...")
             params['page'] = f"{page}"
 
-            response = self.request("/search.json", params=params)
+            try:
+                response = self.request("/search.json", params=params)
+            except requests.ConnectionError:
+                # cool down and retry
+                time.sleep(5)
+                self.delay = self.delay * 2
+                self.http = requests.Session()
+                response = self.request("/search.json", params=params)
 
             if response.status_code != 200:
                 raise RuntimeError("couldn't get category posts {}: status code {}", id, response.status_code)
@@ -218,6 +227,7 @@ class DiscourseHelper:
         for k,v in self.api_auth.items():
             params[k] = v
 
+        time.sleep(self.delay)
         response = self.http.request(method, urljoin(self.identity["url"], path), params=params, data=data)
         if response.status_code != 429:
             return response
@@ -225,6 +235,7 @@ class DiscourseHelper:
         error_message = response.json()["errors"][0]
         seconds_match = re.search("wait (\d+) seconds", error_message)
         if seconds_match:
+            self.delay = self.delay + 0.5
             seconds = int(seconds_match.group(1)) + 1
         else:
             seconds = 5
