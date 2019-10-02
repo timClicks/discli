@@ -43,8 +43,8 @@ class DiscourseHelper:
                 
                 Commands that interact with Discourse directly:
                    get <topic-id>                    Download a Discourse topic 
-                   copy <topic-id>                   Update a topic with the local file's contents
-                   send <topic-id>                   Issue copy, then remove the local file
+                   send [--keep] <topic-id>          Update a topic with the local file's contents.
+                                                     Deletes the local copy unless --keep is specified.
                    sync <category>                   Get all the posts for category
                 '''))
         parser.add_argument('command', help='Subcommand to run')
@@ -130,10 +130,11 @@ class DiscourseHelper:
                 content += '\n'
             f.write(content)
 
-    def _update_topic(self, remove_local=True):
+    def send(self):
         parser = argparse.ArgumentParser(
             description='update a topic')
         parser.add_argument("topic", help="topic id or filename of the discourse post")
+        parser.add_argument("--keep", action='store_true', help="retain the local file")
         args = parser.parse_args(sys.argv[2:])
 
         topic_id, local = self.get_topic_metadata(args.topic)
@@ -146,14 +147,9 @@ class DiscourseHelper:
             content = f.read()
             self.put_post(local['id'], content)
         self.update_metadata(topic_id, None)
-        if remove_local:
+        if not args.keep:
             os.remove(filename)
 
-    def copy(self):
-        self._update_topic(remove_local=False)
-
-    def send(self):
-        self._update_topic(remove_local=True)
 
     def get_post(self, id):
         response = self.request(f"posts/{id}.json")
