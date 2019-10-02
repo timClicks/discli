@@ -202,8 +202,10 @@ class DiscourseHelper:
             if 'topics' not in results:
                 break
 
+            # The discourse API seems to provide an infinite number of pages
+            # for some search queries. The last page is returned again and agian.
             topics = results['topics']
-            topic_ids = set(topic['id'] for topic in topics) # the discourse API seems to provide an infinite number of pages
+            topic_ids = set(topic['id'] for topic in topics)
             if topic_ids == last_topics:
                 break
 
