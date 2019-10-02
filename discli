@@ -43,7 +43,7 @@ class DiscourseHelper:
                 
                 Commands that interact with Discourse directly:
                    get <topic-id>                    Download a Discourse topic 
-                   send [--keep] <topic-id>          Update a topic with the local file's contents.
+                   update [--keep] <topic-id>        Update a topic with the local file's contents.
                                                      Deletes the local copy unless --keep is specified.
                    sync <category>                   Get all the posts for category
                 '''))
@@ -130,7 +130,7 @@ class DiscourseHelper:
                 content += '\n'
             f.write(content)
 
-    def send(self):
+    def update(self):
         parser = argparse.ArgumentParser(
             description='update a topic')
         parser.add_argument("topic", help="topic id or filename of the discourse post")
